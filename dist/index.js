@@ -18857,15 +18857,18 @@ async function retrieveToken(method, client) {
                         break;
                     } catch (error) {
                         lastError = error;
-                        core.debug(`Failed to get ID token (attempt ${attempt}/${maxRetries}): ${error.message}`);
+                        core.error(`Failed to get ID token (attempt ${attempt}/${maxRetries}): ${error.message}`);
                         if (attempt < maxRetries) {
+                            core.info(`Waiting ${retryDelay}ms before retry...`);
                             await new Promise(resolve => setTimeout(resolve, retryDelay));
                         }
                     }
                 }
                 
                 if (!jwt) {
-                    throw new Error(`Failed to get ID token after ${maxRetries} attempts: ${lastError?.message}`);
+                    const errorMessage = `Failed to get ID token after ${maxRetries} attempts: ${lastError?.message}`;
+                    core.setFailed(errorMessage);
+                    throw new Error(errorMessage);
                 }
             } else {
                 jwt = generateJwt(privateKey, keyPassword, Number(tokenTtl));
@@ -18954,8 +18957,10 @@ async function getClientToken(client, method, path, payload) {
         response = await client.post(`${path}`, options);
     } catch (err) {
         if (err instanceof got.HTTPError) {
+            core.error(`failed to retrieve vault token. code: ${err.code}, message: ${err.message}, vaultResponse: ${JSON.stringify(err.response.body)}`)
             throw Error(`failed to retrieve vault token. code: ${err.code}, message: ${err.message}, vaultResponse: ${JSON.stringify(err.response.body)}`)
         } else {
+            core.error(`failed to retrieve vault token. error: ${err}`)
             throw err
         }
     }
