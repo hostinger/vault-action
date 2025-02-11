@@ -18847,7 +18847,26 @@ async function retrieveToken(method, client) {
             const githubAudience = core.getInput('jwtGithubAudience', { required: false });
 
             if (!privateKey) {
-                jwt = await core.getIDToken(githubAudience)
+                const maxRetries = 3;
+                const retryDelay = 1000;
+                let lastError;
+                
+                for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                    try {
+                        jwt = await core.getIDToken(githubAudience);
+                        break;
+                    } catch (error) {
+                        lastError = error;
+                        core.debug(`Failed to get ID token (attempt ${attempt}/${maxRetries}): ${error.message}`);
+                        if (attempt < maxRetries) {
+                            await new Promise(resolve => setTimeout(resolve, retryDelay));
+                        }
+                    }
+                }
+                
+                if (!jwt) {
+                    throw new Error(`Failed to get ID token after ${maxRetries} attempts: ${lastError?.message}`);
+                }
             } else {
                 jwt = generateJwt(privateKey, keyPassword, Number(tokenTtl));
             }
