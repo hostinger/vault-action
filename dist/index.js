@@ -18575,6 +18575,7 @@ async function exportSecrets() {
         prefixUrl: vaultUrl,
         headers: {},
         https: {},
+        timeout: 60000, // 60 second timeout
         retry: {
             statusCodes: [
                 ...got.defaults.options.retry.statusCodes,
@@ -18819,7 +18820,6 @@ const { default: got } = __nccwpck_require__(3061);
 const defaultKubernetesTokenPath = '/var/run/secrets/kubernetes.io/serviceaccount/token'
 const retries = 5
 const retries_delay = 6000
-const timeout = 60000
 /***
  * Authenticate with Vault and retrieve a Vault token that can be used for requests.
  * @param {string} method
@@ -18931,10 +18931,9 @@ async function getClientToken(client, method, path, payload) {
     var options = {
         json: payload,
         responseType,
-        timeout: timeout
     };
 
-    core.debug(`Retrieving Vault Token from ${path} endpoint with timeout: ${timeout}ms`);
+    core.debug(`Retrieving Vault Token from ${path} endpoint`);
 
     /** @type {import('got').Response<VaultLoginResponse>} */
     let response;

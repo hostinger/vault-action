@@ -44,6 +44,7 @@ async function exportSecrets() {
         prefixUrl: vaultUrl,
         headers: {},
         https: {},
+        timeout: 60000, // 60 second timeout
         retry: {
             statusCodes: [
                 ...got.defaults.options.retry.statusCodes,
