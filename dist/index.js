@@ -18849,7 +18849,7 @@ async function retrieveToken(method, client) {
             const githubAudience = core.getInput('jwtGithubAudience', { required: false });
 
             if (!privateKey) {
-                jwt = await retryAsyncFunction(retries, retries_delay, core.getIDToken, githubAudience)
+                jwt = await retryAsyncFunction("get id token", retries, retries_delay, core.getIDToken, githubAudience)
                   .then((result) => {
                     return result;
                 });
@@ -18857,7 +18857,7 @@ async function retrieveToken(method, client) {
                 jwt = generateJwt(privateKey, keyPassword, Number(tokenTtl));
             }
 
-            return await getClientToken(client, method, path, { jwt: jwt, role: role });
+            return await retryAsyncFunction("get client token", retries, retries_delay, getClientToken, client, method, path, { jwt: jwt, role: role });
         }
         case 'kubernetes': {
             const role = core.getInput('role', { required: true })
@@ -18868,7 +18868,7 @@ async function retrieveToken(method, client) {
             }
             return await getClientToken(client, method, path, { jwt: data, role: role })
         }
-        case 'userpass': 
+        case 'userpass':
         case 'ldap': {
             const username = core.getInput('username', { required: true });
             const password = core.getInput('password', { required: true });
@@ -18961,12 +18961,13 @@ async function getClientToken(client, method, path, payload) {
 
 /***
  * Generic function for retrying an async function
+ * @param {string} action
  * @param {number} retries
  * @param {number} delay
  * @param {Function} func
  * @param {any[]} args
  */
-async function retryAsyncFunction(retries, delay, func, ...args) {
+async function retryAsyncFunction(action, retries, delay, func, ...args) {
   let attempt = 0;
   while (attempt < retries) {
     try {
@@ -18974,9 +18975,11 @@ async function retryAsyncFunction(retries, delay, func, ...args) {
       return result;
     } catch (error) {
       attempt++;
+      core.error(`Failed to ${action} (attempt ${attempt}/${retries}): ${error.message}`);
       if (attempt < retries) {
         await new Promise(resolve => setTimeout(resolve, delay));
       } else {
+        core.error(`failed to ${action}. error: ${error}`)
         throw error;
       }
     }
