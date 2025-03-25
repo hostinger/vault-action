@@ -18977,10 +18977,19 @@ async function retryAsyncFunction(action, retries, delay, func, ...args) {
     } catch (error) {
       attempt++;
       core.error(`Failed to ${action} (attempt ${attempt}/${retries}): ${error.message}`);
+      // Log detailed error information for each attempt
+      core.error(`Error details for attempt ${attempt}:`);
+      core.error(`Error name: ${error.name}`);
+      core.error(`Error message: ${error.message}`);
+      core.error(`Error code: ${error.code}`);
+      core.error(`Error stack: ${error.stack}`);
+      if (error.response) {
+        core.error(`Response status: ${error.response.statusCode}`);
+        core.error(`Response body: ${JSON.stringify(error.response.body)}`);
+      }
       if (attempt < retries) {
         await new Promise(resolve => setTimeout(resolve, delay));
       } else {
-        core.error(`failed to ${action}. error: ${error}`)
         throw error;
       }
     }
