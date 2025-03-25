@@ -6,7 +6,8 @@ const { default: got } = require('got');
 
 const defaultKubernetesTokenPath = '/var/run/secrets/kubernetes.io/serviceaccount/token'
 const retries = 5
-const retries_delay = 3000
+const retries_delay = 6000
+const timeout = 60000
 /***
  * Authenticate with Vault and retrieve a Vault token that can be used for requests.
  * @param {string} method
@@ -118,9 +119,10 @@ async function getClientToken(client, method, path, payload) {
     var options = {
         json: payload,
         responseType,
+        timeout: timeout
     };
 
-    core.debug(`Retrieving Vault Token from ${path} endpoint`);
+    core.debug(`Retrieving Vault Token from ${path} endpoint with timeout: ${timeout}ms`);
 
     /** @type {import('got').Response<VaultLoginResponse>} */
     let response;
