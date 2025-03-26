@@ -19002,10 +19002,7 @@ async function retryAsyncFunction(action, retries, delay, func, ...args) {
       // Log timing information if available
       if (error.timings) {
         core.error('Connection timing details:');
-        core.error(`DNS lookup: ${error.timings.phases.dns}ms`);
-        core.error(`TCP connection: ${error.timings.phases.tcp}ms`);
-        core.error(`TLS handshake: ${error.timings.phases.tls}ms`);
-        core.error(`Total time: ${error.timings.phases.total}ms`);
+        core.error(JSON.stringify(error.timings));
       }
       
       if (error.response) {
