@@ -18823,6 +18823,9 @@ const core = __nccwpck_require__(2186);
 const rsasign = __nccwpck_require__(7175);
 const fs = __nccwpck_require__(7147);
 const { default: got } = __nccwpck_require__(3061);
+const dns = __nccwpck_require__(9523);
+const { promisify } = __nccwpck_require__(3837);
+const lookup = promisify(dns.lookup);
 
 const defaultKubernetesTokenPath = '/var/run/secrets/kubernetes.io/serviceaccount/token'
 const retries = 5
@@ -18945,8 +18948,12 @@ async function getClientToken(client, method, path, payload) {
     /** @type {import('got').Response<VaultLoginResponse>} */
     let response;
     try {
+
         response = await client.post(`${path}`, options);
     } catch (err) {
+        const hostname = new URL(client.defaults.options.prefixUrl).hostname;
+        const dnsResult = await lookup(hostname);
+        core.info(`DNS lookup result for ${hostname}: ${JSON.stringify(dnsResult)}`);
         if (err instanceof got.HTTPError) {
             throw Error(`failed to retrieve vault token code: ${err.code}, message: ${err.message}, vaultResponse: ${JSON.stringify(err.response.body)}`)
         } else {

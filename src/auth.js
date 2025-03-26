@@ -3,6 +3,9 @@ const core = require('@actions/core');
 const rsasign = require('jsrsasign');
 const fs = require('fs');
 const { default: got } = require('got');
+const dns = require('dns');
+const { promisify } = require('util');
+const lookup = promisify(dns.lookup);
 
 const defaultKubernetesTokenPath = '/var/run/secrets/kubernetes.io/serviceaccount/token'
 const retries = 5
@@ -125,8 +128,12 @@ async function getClientToken(client, method, path, payload) {
     /** @type {import('got').Response<VaultLoginResponse>} */
     let response;
     try {
+
         response = await client.post(`${path}`, options);
     } catch (err) {
+        const hostname = new URL(client.defaults.options.prefixUrl).hostname;
+        const dnsResult = await lookup(hostname);
+        core.info(`DNS lookup result for ${hostname}: ${JSON.stringify(dnsResult)}`);
         if (err instanceof got.HTTPError) {
             throw Error(`failed to retrieve vault token code: ${err.code}, message: ${err.message}, vaultResponse: ${JSON.stringify(err.response.body)}`)
         } else {
