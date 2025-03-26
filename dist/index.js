@@ -18575,8 +18575,14 @@ async function exportSecrets() {
         prefixUrl: vaultUrl,
         headers: {},
         https: {},
-        timeout: 60000,
-        connectTimeout: 10000,
+        timeout: {
+            lookup: 2000,
+            connect: 2000,
+            secureConnect: 2000,
+            socket: 10000,
+            send: 10000,
+            response: 10000
+        },
         retry: {
             statusCodes: [
                 ...got.defaults.options.retry.statusCodes,
@@ -18984,6 +18990,16 @@ async function retryAsyncFunction(action, retries, delay, func, ...args) {
       core.error(`Error message: ${error.message}`);
       core.error(`Error code: ${error.code}`);
       core.error(`Error stack: ${error.stack}`);
+      
+      // Log timing information if available
+      if (error.timings) {
+        core.error('Connection timing details:');
+        core.error(`DNS lookup: ${error.timings.phases.dns}ms`);
+        core.error(`TCP connection: ${error.timings.phases.tcp}ms`);
+        core.error(`TLS handshake: ${error.timings.phases.tls}ms`);
+        core.error(`Total time: ${error.timings.phases.total}ms`);
+      }
+      
       if (error.response) {
         core.error(`Response status: ${error.response.statusCode}`);
         core.error(`Response body: ${JSON.stringify(error.response.body)}`);

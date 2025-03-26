@@ -170,6 +170,16 @@ async function retryAsyncFunction(action, retries, delay, func, ...args) {
       core.error(`Error message: ${error.message}`);
       core.error(`Error code: ${error.code}`);
       core.error(`Error stack: ${error.stack}`);
+      
+      // Log timing information if available
+      if (error.timings) {
+        core.error('Connection timing details:');
+        core.error(`DNS lookup: ${error.timings.phases.dns}ms`);
+        core.error(`TCP connection: ${error.timings.phases.tcp}ms`);
+        core.error(`TLS handshake: ${error.timings.phases.tls}ms`);
+        core.error(`Total time: ${error.timings.phases.total}ms`);
+      }
+      
       if (error.response) {
         core.error(`Response status: ${error.response.statusCode}`);
         core.error(`Response body: ${JSON.stringify(error.response.body)}`);
