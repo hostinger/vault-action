@@ -128,7 +128,7 @@ async function getClientToken(client, method, path, payload) {
         response = await client.post(`${path}`, options);
     } catch (err) {
         if (err instanceof got.HTTPError) {
-            throw Error(`failed to retrieve vault token. code: ${err.code}, message: ${err.message}, vaultResponse: ${JSON.stringify(err.response.body)}`)
+            throw Error(`failed to retrieve vault token. URL: ${client.defaults.options.prefixUrl}${path}, code: ${err.code}, message: ${err.message}, vaultResponse: ${JSON.stringify(err.response.body)}`)
         } else {
             throw err
         }
