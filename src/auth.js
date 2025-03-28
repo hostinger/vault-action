@@ -3,8 +3,13 @@ const core = require('@actions/core');
 const rsasign = require('jsrsasign');
 const fs = require('fs');
 const { default: got } = require('got');
+const dns = require('dns');
+const { promisify } = require('util');
+const lookup = promisify(dns.lookup);
 
 const defaultKubernetesTokenPath = '/var/run/secrets/kubernetes.io/serviceaccount/token'
+const retries = 5
+const retries_delay = 6000
 /***
  * Authenticate with Vault and retrieve a Vault token that can be used for requests.
  * @param {string} method
@@ -35,34 +40,15 @@ async function retrieveToken(method, client) {
             const githubAudience = core.getInput('jwtGithubAudience', { required: false });
 
             if (!privateKey) {
-                const maxRetries = 3;
-                const retryDelay = 1000;
-                let lastError;
-                
-                for (let attempt = 1; attempt <= maxRetries; attempt++) {
-                    try {
-                        jwt = await core.getIDToken(githubAudience);
-                        break;
-                    } catch (error) {
-                        lastError = error;
-                        core.error(`Failed to get ID token (attempt ${attempt}/${maxRetries}): ${error.message}`);
-                        if (attempt < maxRetries) {
-                            core.info(`Waiting ${retryDelay}ms before retry...`);
-                            await new Promise(resolve => setTimeout(resolve, retryDelay));
-                        }
-                    }
-                }
-                
-                if (!jwt) {
-                    const errorMessage = `Failed to get ID token after ${maxRetries} attempts: ${lastError?.message}`;
-                    core.setFailed(errorMessage);
-                    throw new Error(errorMessage);
-                }
+                jwt = await retryAsyncFunction("get id token", retries, retries_delay, core.getIDToken, githubAudience)
+                  .then((result) => {
+                    return result;
+                });
             } else {
                 jwt = generateJwt(privateKey, keyPassword, Number(tokenTtl));
             }
 
-            return await getClientToken(client, method, path, { jwt: jwt, role: role });
+            return await retryAsyncFunction("get client token", retries, retries_delay, getClientToken, client, method, path, { jwt: jwt, role: role });
         }
         case 'kubernetes': {
             const role = core.getInput('role', { required: true })
@@ -73,7 +59,7 @@ async function retrieveToken(method, client) {
             }
             return await getClientToken(client, method, path, { jwt: data, role: role })
         }
-        case 'userpass': 
+        case 'userpass':
         case 'ldap': {
             const username = core.getInput('username', { required: true });
             const password = core.getInput('password', { required: true });
@@ -142,13 +128,16 @@ async function getClientToken(client, method, path, payload) {
     /** @type {import('got').Response<VaultLoginResponse>} */
     let response;
     try {
+
         response = await client.post(`${path}`, options);
     } catch (err) {
+        const hostname = new URL(client.defaults.options.prefixUrl).hostname;
+        const dnsResult = await lookup(hostname);
+        core.info(`DNS lookup result for ${hostname}: ${JSON.stringify(dnsResult)}`);
         if (err instanceof got.HTTPError) {
-            core.error(`failed to retrieve vault token. code: ${err.code}, message: ${err.message}, vaultResponse: ${JSON.stringify(err.response.body)}`)
-            throw Error(`failed to retrieve vault token. code: ${err.code}, message: ${err.message}, vaultResponse: ${JSON.stringify(err.response.body)}`)
+            throw Error(`failed to retrieve vault token code: ${err.code}, message: ${err.message}, vaultResponse: ${JSON.stringify(err.response.body)}`)
         } else {
-            core.error(`failed to retrieve vault token. error: ${err}`)
+            core.error(`failed to retrieve vault token. URL: ${client.defaults.options.prefixUrl}${path}`);
             throw err
         }
     }
@@ -164,6 +153,49 @@ async function getClientToken(client, method, path, payload) {
     } else {
         throw Error(`Unable to retrieve token from ${method}'s login endpoint.`);
     }
+}
+
+/***
+ * Generic function for retrying an async function
+ * @param {string} action
+ * @param {number} retries
+ * @param {number} delay
+ * @param {Function} func
+ * @param {any[]} args
+ */
+async function retryAsyncFunction(action, retries, delay, func, ...args) {
+  let attempt = 0;
+  while (attempt < retries) {
+    try {
+      const result = await func(...args);
+      return result;
+    } catch (error) {
+      attempt++;
+      core.error(`Failed to ${action} (attempt ${attempt}/${retries}): ${error.message}`);
+      // Log detailed error information for each attempt
+      core.error(`Error details for attempt ${attempt}:`);
+      core.error(`Error name: ${error.name}`);
+      core.error(`Error message: ${error.message}`);
+      core.error(`Error code: ${error.code}`);
+      core.error(`Error stack: ${error.stack}`);
+      
+      // Log timing information if available
+      if (error.timings) {
+        core.error('Connection timing details:');
+        core.error(JSON.stringify(error.timings));
+      }
+      
+      if (error.response) {
+        core.error(`Response status: ${error.response.statusCode}`);
+        core.error(`Response body: ${JSON.stringify(error.response.body)}`);
+      }
+      if (attempt < retries) {
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        throw error;
+      }
+    }
+  }
 }
 
 /***

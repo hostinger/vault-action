@@ -18535,7 +18535,7 @@ const command = __nccwpck_require__(7351);
 const got = (__nccwpck_require__(3061)["default"]);
 const jsonata = __nccwpck_require__(4245);
 const { normalizeOutputKey } = __nccwpck_require__(1608);
-const { WILDCARD } = __nccwpck_require__(4438);
+const { WILDCARD, WILDCARD_UPPERCASE } = __nccwpck_require__(4438);
 
 const { auth: { retrieveToken }, secrets: { getSecrets }, pki: { getCertificates } } = __nccwpck_require__(4351);
 
@@ -18575,6 +18575,14 @@ async function exportSecrets() {
         prefixUrl: vaultUrl,
         headers: {},
         https: {},
+        timeout: {
+            lookup: 2000,
+            connect: 2000,
+            secureConnect: 2000,
+            socket: 10000,
+            send: 10000,
+            response: 10000
+        },
         retry: {
             statusCodes: [
                 ...got.defaults.options.retry.statusCodes,
@@ -18752,7 +18760,7 @@ function parseSecretsInput(secretsInput) {
         const selectorAst = jsonata(selectorQuoted).ast();
         const selector = selectorQuoted.replace(new RegExp('"', 'g'), '');
 
-        if (selector !== WILDCARD && (selectorAst.type !== "path" || selectorAst.steps[0].stages) && selectorAst.type !== "string" && !outputVarName) {
+        if (selector !== WILDCARD && selector !== WILDCARD_UPPERCASE && (selectorAst.type !== "path" || selectorAst.steps[0].stages) && selectorAst.type !== "string" && !outputVarName) {
             throw Error(`You must provide a name for the output key when using json selectors. Input: "${secret}"`);
         }
 
@@ -18815,8 +18823,13 @@ const core = __nccwpck_require__(2186);
 const rsasign = __nccwpck_require__(7175);
 const fs = __nccwpck_require__(7147);
 const { default: got } = __nccwpck_require__(3061);
+const dns = __nccwpck_require__(9523);
+const { promisify } = __nccwpck_require__(3837);
+const lookup = promisify(dns.lookup);
 
 const defaultKubernetesTokenPath = '/var/run/secrets/kubernetes.io/serviceaccount/token'
+const retries = 5
+const retries_delay = 6000
 /***
  * Authenticate with Vault and retrieve a Vault token that can be used for requests.
  * @param {string} method
@@ -18847,34 +18860,15 @@ async function retrieveToken(method, client) {
             const githubAudience = core.getInput('jwtGithubAudience', { required: false });
 
             if (!privateKey) {
-                const maxRetries = 3;
-                const retryDelay = 1000;
-                let lastError;
-                
-                for (let attempt = 1; attempt <= maxRetries; attempt++) {
-                    try {
-                        jwt = await core.getIDToken(githubAudience);
-                        break;
-                    } catch (error) {
-                        lastError = error;
-                        core.error(`Failed to get ID token (attempt ${attempt}/${maxRetries}): ${error.message}`);
-                        if (attempt < maxRetries) {
-                            core.info(`Waiting ${retryDelay}ms before retry...`);
-                            await new Promise(resolve => setTimeout(resolve, retryDelay));
-                        }
-                    }
-                }
-                
-                if (!jwt) {
-                    const errorMessage = `Failed to get ID token after ${maxRetries} attempts: ${lastError?.message}`;
-                    core.setFailed(errorMessage);
-                    throw new Error(errorMessage);
-                }
+                jwt = await retryAsyncFunction("get id token", retries, retries_delay, core.getIDToken, githubAudience)
+                  .then((result) => {
+                    return result;
+                });
             } else {
                 jwt = generateJwt(privateKey, keyPassword, Number(tokenTtl));
             }
 
-            return await getClientToken(client, method, path, { jwt: jwt, role: role });
+            return await retryAsyncFunction("get client token", retries, retries_delay, getClientToken, client, method, path, { jwt: jwt, role: role });
         }
         case 'kubernetes': {
             const role = core.getInput('role', { required: true })
@@ -18885,7 +18879,7 @@ async function retrieveToken(method, client) {
             }
             return await getClientToken(client, method, path, { jwt: data, role: role })
         }
-        case 'userpass': 
+        case 'userpass':
         case 'ldap': {
             const username = core.getInput('username', { required: true });
             const password = core.getInput('password', { required: true });
@@ -18954,13 +18948,16 @@ async function getClientToken(client, method, path, payload) {
     /** @type {import('got').Response<VaultLoginResponse>} */
     let response;
     try {
+
         response = await client.post(`${path}`, options);
     } catch (err) {
+        const hostname = new URL(client.defaults.options.prefixUrl).hostname;
+        const dnsResult = await lookup(hostname);
+        core.info(`DNS lookup result for ${hostname}: ${JSON.stringify(dnsResult)}`);
         if (err instanceof got.HTTPError) {
-            core.error(`failed to retrieve vault token. code: ${err.code}, message: ${err.message}, vaultResponse: ${JSON.stringify(err.response.body)}`)
-            throw Error(`failed to retrieve vault token. code: ${err.code}, message: ${err.message}, vaultResponse: ${JSON.stringify(err.response.body)}`)
+            throw Error(`failed to retrieve vault token code: ${err.code}, message: ${err.message}, vaultResponse: ${JSON.stringify(err.response.body)}`)
         } else {
-            core.error(`failed to retrieve vault token. error: ${err}`)
+            core.error(`failed to retrieve vault token. URL: ${client.defaults.options.prefixUrl}${path}`);
             throw err
         }
     }
@@ -18976,6 +18973,49 @@ async function getClientToken(client, method, path, payload) {
     } else {
         throw Error(`Unable to retrieve token from ${method}'s login endpoint.`);
     }
+}
+
+/***
+ * Generic function for retrying an async function
+ * @param {string} action
+ * @param {number} retries
+ * @param {number} delay
+ * @param {Function} func
+ * @param {any[]} args
+ */
+async function retryAsyncFunction(action, retries, delay, func, ...args) {
+  let attempt = 0;
+  while (attempt < retries) {
+    try {
+      const result = await func(...args);
+      return result;
+    } catch (error) {
+      attempt++;
+      core.error(`Failed to ${action} (attempt ${attempt}/${retries}): ${error.message}`);
+      // Log detailed error information for each attempt
+      core.error(`Error details for attempt ${attempt}:`);
+      core.error(`Error name: ${error.name}`);
+      core.error(`Error message: ${error.message}`);
+      core.error(`Error code: ${error.code}`);
+      core.error(`Error stack: ${error.stack}`);
+      
+      // Log timing information if available
+      if (error.timings) {
+        core.error('Connection timing details:');
+        core.error(JSON.stringify(error.timings));
+      }
+      
+      if (error.response) {
+        core.error(`Response status: ${error.response.statusCode}`);
+        core.error(`Response body: ${JSON.stringify(error.response.body)}`);
+      }
+      if (attempt < retries) {
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        throw error;
+      }
+    }
+  }
 }
 
 /***
@@ -19000,11 +19040,14 @@ module.exports = {
 /***/ 4438:
 /***/ ((module) => {
 
-const WILDCARD = '*';
+const WILDCARD_UPPERCASE = '*';
+const WILDCARD = '**';
 
 module.exports = {
-    WILDCARD
+    WILDCARD,
+    WILDCARD_UPPERCASE,
 };
+
 
 /***/ }),
 
@@ -19109,7 +19152,7 @@ module.exports = {
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 const jsonata = __nccwpck_require__(4245);
-const { WILDCARD } = __nccwpck_require__(4438);
+const { WILDCARD, WILDCARD_UPPERCASE} = __nccwpck_require__(4438);
 const { normalizeOutputKey } = __nccwpck_require__(1608);
 const core = __nccwpck_require__(2186);
 
@@ -19136,6 +19179,7 @@ const core = __nccwpck_require__(2186);
 async function getSecrets(secretRequests, client, ignoreNotFound) {
     const responseCache = new Map();
     let results = [];
+    let upperCaseEnv = false;
 
     for (const secretRequest of secretRequests) {
         let { path, selector } = secretRequest;
@@ -19169,7 +19213,8 @@ async function getSecrets(secretRequests, client, ignoreNotFound) {
 
         body = JSON.parse(body);
 
-        if (selector == WILDCARD) {
+        if (selector === WILDCARD || selector === WILDCARD_UPPERCASE) {
+            upperCaseEnv = selector === WILDCARD_UPPERCASE;
             let keys = body.data;
             if (body.data["data"] != undefined) {
                 keys = keys.data;
@@ -19188,7 +19233,7 @@ async function getSecrets(secretRequests, client, ignoreNotFound) {
                 }
 
                 newRequest.outputVarName = normalizeOutputKey(newRequest.outputVarName);
-                newRequest.envVarName = normalizeOutputKey(newRequest.envVarName,true);
+                newRequest.envVarName = normalizeOutputKey(newRequest.envVarName, upperCaseEnv);
 
                 // JSONata field references containing reserved tokens should
                 // be enclosed in backticks
@@ -19297,12 +19342,12 @@ module.exports = {
  * @param {string} dataKey
  * @param {boolean=} isEnvVar
  */
-function normalizeOutputKey(dataKey, isEnvVar = false) {
+function normalizeOutputKey(dataKey, upperCase = false) {
   let outputKey = dataKey
     .replace(".", "__")
     .replace(new RegExp("-", "g"), "")
     .replace(/[^\p{L}\p{N}_-]/gu, "");
-  if (isEnvVar) {
+  if (upperCase) {
     outputKey = outputKey.toUpperCase();
   }
   return outputKey;
